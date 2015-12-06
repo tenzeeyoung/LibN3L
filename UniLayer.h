@@ -10,26 +10,23 @@
 #include "tensor.h"
 #include "MyLib.h"
 #include "Utiltensor.h"
+#include "Parameter.h"
 
 using namespace mshadow;
 using namespace mshadow::expr;
 using namespace mshadow::utils;
+
+//#define DIM2 xpu, 2, dtype
 
 template<typename xpu>
 class UniLayer {
 
 public:
 
-  Tensor<xpu, 2, dtype> _W;
-  Tensor<xpu, 2, dtype> _b;
+  Parameter2 _paramW;
+  Parameter2 _paramB;
 
-  Tensor<xpu, 2, dtype> _gradW;
-  Tensor<xpu, 2, dtype> _gradb;
-
-  Tensor<xpu, 2, dtype> _eg2W;
-  Tensor<xpu, 2, dtype> _eg2b;
-
-  bool _bUseB;
+  bool _useB;
 
   int _funcType; // 0: tanh, 1: sigmod, 2: f(x)=x, 3: exp
 
@@ -41,67 +38,49 @@ public:
     dtype bound = sqrt(6.0 / (nOSize + nISize + 1));
     //dtype bound = 0.01;
 
-    _W = NewTensor<xpu>(Shape2(nOSize, nISize), d_zero);
-    _gradW = NewTensor<xpu>(Shape2(nOSize, nISize), d_zero);
-    _eg2W = NewTensor<xpu>(Shape2(nOSize, nISize), d_zero);
+    _paramW = Parameter2(nOSize, nISize);
+    _paramW.random(bound, seed);
 
-    _b = NewTensor<xpu>(Shape2(1, nOSize), d_zero);
-    _gradb = NewTensor<xpu>(Shape2(1, nOSize), d_zero);
-    _eg2b = NewTensor<xpu>(Shape2(1, nOSize), d_zero);
+    if( bUseB )
+    {   
+        _paramB = Parameter1(nOSize);
+        _paramB.random(bound, seed + 1);
+    }
 
-    random(_W, -1.0 * bound, 1.0 * bound, seed);
-    random(_b, -1.0 * bound, 1.0 * bound, seed + 1);
-
-    _bUseB = bUseB;
+    _useB = bUseB;
     _funcType = funcType;
   }
 
   inline void initial(Tensor<xpu, 2, dtype> W, Tensor<xpu, 2, dtype> b, bool bUseB = true, int funcType = 0) {
-    static int nOSize, nISize;
+    /*static int nOSize, nISize;
     nOSize = W.size(0);
-    nISize = W.size(1);
+    nISize = W.size(1);*/
 
-    _W = NewTensor<xpu>(Shape2(nOSize, nISize), d_zero);
-    _gradW = NewTensor<xpu>(Shape2(nOSize, nISize), d_zero);
-    _eg2W = NewTensor<xpu>(Shape2(nOSize, nISize), d_zero);
-    Copy(_W, W);
-
-    _b = NewTensor<xpu>(Shape2(1, nOSize), d_zero);
-    _gradb = NewTensor<xpu>(Shape2(1, nOSize), d_zero);
-    _eg2b = NewTensor<xpu>(Shape2(1, nOSize), d_zero);
+    _paramW = Parameter2(W);
 
     if (bUseB)
-      Copy(_b, b);
+      _paramB = Parameter1(b);
 
-    _bUseB = bUseB;
+    _useB = bUseB;
     _funcType = funcType;
   }
 
   inline void initial(Tensor<xpu, 2, dtype> W,  int funcType = 0) {
     static int nOSize, nISize;
     nOSize = W.size(0);
-    nISize = W.size(1);
+    //nISize = W.size(1);
 
-    _W = NewTensor<xpu>(Shape2(nOSize, nISize), d_zero);
-    _gradW = NewTensor<xpu>(Shape2(nOSize, nISize), d_zero);
-    _eg2W = NewTensor<xpu>(Shape2(nOSize, nISize), d_zero);
-    Copy(_W, W);
+    _paramW = Parameter2(W);
 
-    _b = NewTensor<xpu>(Shape2(1, nOSize), d_zero);
-    _gradb = NewTensor<xpu>(Shape2(1, nOSize), d_zero);
-    _eg2b = NewTensor<xpu>(Shape2(1, nOSize), d_zero);
+    //_paramB = Parameter1(nOSize);
 
-
-    _bUseB = false;
+    _useB = false;
     _funcType = funcType;
   }
   inline void release() {
-    FreeSpace(&_W);
-    FreeSpace(&_gradW);
-    FreeSpace(&_eg2W);
-    FreeSpace(&_b);
-    FreeSpace(&_gradb);
-    FreeSpace(&_eg2b);
+    _paramW.release();
+    if(_useB)
+        _paramB.release();
   }
 
   virtual ~UniLayer() {
@@ -109,27 +88,27 @@ public:
   }
 
   inline dtype squarenormAll() {
-    dtype result = squarenorm(_gradW);
+    dtype result = _paramW.squarenorm();
 
-    if (_bUseB) {
-      result += squarenorm(_gradb);
+    if (_useB) {
+      result += _paramB.squarenorm();
     }
 
     return result;
   }
 
   inline void scaleGrad(dtype scale) {
-    _gradW = _gradW * scale;
-    if (_bUseB) {
-      _gradb = _gradb * scale;
+    _paramW.scaleGrad( scale );
+    if (_useB) {
+      _paramB.scaleGrad( scale );
     }
   }
 
 public:
   inline void ComputeForwardScore(Tensor<xpu, 2, dtype> x, Tensor<xpu, 2, dtype> y) {
-    y = dot(x, _W.T());
-    if (_bUseB)
-      y = y + _b;
+    y = dot(x, _paramW.weight.T());
+    if (_useB)
+      y = y + _paramB.weight;
     if (_funcType == 0)
       y = F<nl_tanh>(y);
     else if (_funcType == 1)
@@ -141,9 +120,9 @@ public:
   inline void ComputeForwardScore(Tensor<xpu, 3, dtype> x, Tensor<xpu, 3, dtype> y) {
     int seq_size = y.size(0);
     for (int id = 0; id < seq_size; id++) {
-      y[id] = dot(x[id], _W.T());
-      if (_bUseB)
-        y[id] = y[id] + _b;
+      y[id] = dot(x[id], _paramW.weight.T());
+      if (_useB)
+        y[id] = y[id] + _paramB.weight;
       if (_funcType == 0)
         y[id] = F<nl_tanh>(y[id]);
       else if (_funcType == 1)
@@ -156,9 +135,9 @@ public:
   inline void ComputeForwardScore(const std::vector<Tensor<xpu, 2, dtype> > &x, std::vector<Tensor<xpu, 2, dtype> > &y) {
     int seq_size = y.size();
     for (int id = 0; id < seq_size; id++) {
-      y[id] = dot(x[id], _W.T());
-      if (_bUseB)
-        y[id] = y[id] + _b;
+      y[id] = dot(x[id], _paramW.weight.T());
+      if (_useB)
+        y[id] = y[id] + _paramB.weight;
       if (_funcType == 0)
         y[id] = F<nl_tanh>(y[id]);
       else if (_funcType == 1)
@@ -190,14 +169,14 @@ public:
       Copy(cly, ly);
     }
     //_gradW
-    _gradW += dot(cly.T(), x);
+    _paramW.grad += dot(cly.T(), x);
 
     //_gradb
-    if (_bUseB)
-      _gradb += cly;
+    if (_useB)
+      _paramB.grad += cly;
 
     //lx
-    lx += dot(cly, _W);
+    lx += dot(cly, _paramW.weight);
 
     FreeSpace(&deri_yx);
     FreeSpace(&cly);
@@ -228,14 +207,14 @@ public:
         Copy(cly, ly[id]);
       }
       //_gradW
-      _gradW += dot(cly.T(), x[id]);
+      _paramW.grad += dot(cly.T(), x[id]);
 
       //_gradb
-      if (_bUseB)
-        _gradb += cly;
+      if (_useB)
+        _paramW.grad += cly;
 
       //lx
-      lx[id] += dot(cly, _W);
+      lx[id] += dot(cly, _paramW.weight);
     }
 
     FreeSpace(&deri_yx);
@@ -272,14 +251,14 @@ public:
         Copy(cly, ly[id]);
       }
       //_gradW
-      _gradW += dot(cly.T(), x[id]);
+      _paramW.grad += dot(cly.T(), x[id]);
 
       //_gradb
-      if (_bUseB)
-        _gradb += cly;
+      if (_useB)
+        _paramW.grad += cly;
 
       //lx
-      lx[id] += dot(cly, _W);
+      lx[id] += dot(cly, _paramW.weight);
     }
 
     FreeSpace(&deri_yx);
@@ -288,18 +267,18 @@ public:
 
   inline void randomprint(int num) {
     static int nOSize, nISize;
-    nOSize = _W.size(0);
-    nISize = _W.size(1);
+    nOSize = _paramW.size(0);
+    nISize = _paramW.size(1);
     int count = 0;
     while (count < num) {
       int idx = rand() % nOSize;
       int idy = rand() % nISize;
 
-      std::cout << "_W[" << idx << "," << idy << "]=" << _W[idx][idy] << " ";
+      std::cout << "_paramW[" << idx << "," << idy << "]=" << _paramW.weight[idx][idy] << " ";
 
-      if (_bUseB) {
+      if (_useB) {
         int idz = rand() % nOSize;
-        std::cout << "_b[0][" << idz << "]=" << _b[0][idz] << " ";
+        std::cout << "_paramB[0][" << idz << "]=" << _paramB.weight[0][idz] << " ";
       }
       count++;
     }
@@ -308,23 +287,19 @@ public:
   }
 
   inline void updateAdaGrad(dtype regularizationWeight, dtype adaAlpha, dtype adaEps) {
-    _gradW = _gradW + _W * regularizationWeight;
-    _eg2W = _eg2W + _gradW * _gradW;
-    _W = _W - _gradW * adaAlpha / F<nl_sqrt>(_eg2W + adaEps);
 
-    if (_bUseB) {
-      _gradb = _gradb + _b * regularizationWeight;
-      _eg2b = _eg2b + _gradb * _gradb;
-      _b = _b - _gradb * adaAlpha / F<nl_sqrt>(_eg2b + adaEps);
+    _paramW.updateAdaGrad(regularizationWeight, adaAlpha, adaEps);
+
+    if (_useB) {
+        _paramB.updateAdaGrad(regularizationWeight, adaAlpha, adaEps);
     }
-
     clearGrad();
   }
 
   inline void clearGrad() {
-    _gradW = 0;
-    if (_bUseB)
-      _gradb = 0;
+    _paramW.clearGrad();
+    if (_useB)
+      _paramB.clearGrad();
   }
 };
 
