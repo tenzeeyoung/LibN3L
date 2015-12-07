@@ -24,170 +24,170 @@ class LookupTable {
 
 public:
 
-  hash_set<int> _indexers;
+    hash_set<int> _indexers;
 
-  Tensor<xpu, 2, dtype> _E;
-  Tensor<xpu, 2, dtype> _gradE;
-  Tensor<xpu, 2, dtype> _eg2E;
+    Tensor<xpu, 2, dtype> _E;
+    Tensor<xpu, 2, dtype> _gradE;
+    Tensor<xpu, 2, dtype> _eg2E;
 
-  Tensor<xpu, 2, dtype> _ftE;
+    Tensor<xpu, 2, dtype> _ftE;
 
-  bool _bFineTune;
-  int _nDim;
-  int _nVSize;
+    bool _bFineTune;
+    int _nDim;
+    int _nVSize;
 
-  int _max_update;
-  NRVec<int> _last_update;
-
-public:
-
-  LookupTable() {
-    _indexers.clear();
-  }
-
-
-  inline void initial(const NRMat<dtype>& wordEmb) {
-    _nVSize = wordEmb.nrows();
-    _nDim = wordEmb.ncols();
-
-    _E = NewTensor<xpu>(Shape2(_nVSize, _nDim), d_zero);
-    _gradE = NewTensor<xpu>(Shape2(_nVSize, _nDim), d_zero);
-    _eg2E = NewTensor<xpu>(Shape2(_nVSize, _nDim), d_zero);
-    _ftE = NewTensor<xpu>(Shape2(_nVSize, _nDim), d_one);
-    assign(_E, wordEmb);
-    for (int idx = 0; idx < _nVSize; idx++) {
-      norm2one(_E, idx);
-    }
-
-    _bFineTune = true;
-
-    _max_update = 0;
-    _last_update.resize(_nVSize);
-    _last_update = 0;
-  }
-
-  inline void setEmbFineTune(bool bFineTune) {
-    _bFineTune = bFineTune;
-  }
-
-  inline void release() {
-    FreeSpace(&_E);
-    FreeSpace(&_gradE);
-    FreeSpace(&_eg2E);
-    FreeSpace(&_ftE);
-    _indexers.clear();
-  }
-
-  virtual ~LookupTable() {
-    // TODO Auto-generated destructor stub
-  }
-
-  inline dtype squarenormAll() {
-    dtype result = 0;
-    static hash_set<int>::iterator it;
-    for (int idx = 0; idx < _nDim; idx++) {
-      for (it = _indexers.begin(); it != _indexers.end(); ++it) {
-        result += _gradE[*it][idx] * _gradE[*it][idx];
-      }
-    }
-
-
-    return result;
-  }
-
-  inline void scaleGrad(dtype scale) {
-    static hash_set<int>::iterator it;
-    for (int idx = 0; idx < _nDim; idx++) {
-      for (it = _indexers.begin(); it != _indexers.end(); ++it) {
-        _gradE[*it][idx] = _gradE[*it][idx] * scale;
-      }
-    }
-
-  }
-
-  inline bool bEmbFineTune()
-  {
-    return _bFineTune;
-  }
+    int _max_update;
+    NRVec<int> _last_update;
 
 public:
-  void GetEmb(int id, Tensor<xpu, 2, dtype> y) {
-    updateSparseWeight(id);
-    assert(y.size(0) == 1);
-    y = 0.0;
-    y[0] += _E[id];
-  }
 
-  // loss is stopped at this layer, since the input is one-hold alike
-  void EmbLoss(int id, Tensor<xpu, 2, dtype> ly) {
-    if(!_bFineTune) return;
-    //_gradE
-    assert(ly.size(0) == 1);
-    _gradE[id] += ly[0];
-    _indexers.insert(id);
-
-  }
-
-
-  void randomprint(int num) {
-    static int _nVSize, _nDim;
-    _nVSize = _E.size(0);
-    _nDim = _E.size(1);
-    int count = 0;
-    while (count < num) {
-      int idx = rand() % _nVSize;
-      int idy = rand() % _nDim;
-
-      std::cout << "_E[" << idx << "," << idy << "]=" << _E[idx][idy] << " ";
-
-      count++;
+    LookupTable() {
+        _indexers.clear();
     }
 
-    std::cout << std::endl;
-  }
 
-  void updateAdaGrad(dtype regularizationWeight, dtype adaAlpha, dtype adaEps) {
+    inline void initial(const NRMat<dtype>& wordEmb) {
+        _nVSize = wordEmb.nrows();
+        _nDim = wordEmb.ncols();
 
-    if(!_bFineTune) return;
-    static hash_set<int>::iterator it;
-    _max_update++;
+        _E = NewTensor<xpu>(Shape2(_nVSize, _nDim), d_zero);
+        _gradE = NewTensor<xpu>(Shape2(_nVSize, _nDim), d_zero);
+        _eg2E = NewTensor<xpu>(Shape2(_nVSize, _nDim), d_zero);
+        _ftE = NewTensor<xpu>(Shape2(_nVSize, _nDim), d_one);
+        assign(_E, wordEmb);
+        for (int idx = 0; idx < _nVSize; idx++) {
+            norm2one(_E, idx);
+        }
 
-    Tensor<xpu, 1, dtype> sqrt_eg2E = NewTensor<xpu>(Shape1(_E.size(1)), d_zero);
+        _bFineTune = true;
 
-    for (it = _indexers.begin(); it != _indexers.end(); ++it) {
-      int index = *it;
-      _eg2E[index] = _eg2E[index] + _gradE[index] * _gradE[index];
-      sqrt_eg2E = F<nl_sqrt>(_eg2E[index] + adaEps);
-      _E[index] = (_E[index] * sqrt_eg2E - _gradE[index] * adaAlpha) / (adaAlpha * regularizationWeight + sqrt_eg2E);
-      _ftE[index] = sqrt_eg2E / (adaAlpha * regularizationWeight + sqrt_eg2E);
+        _max_update = 0;
+        _last_update.resize(_nVSize);
+        _last_update = 0;
     }
 
-    FreeSpace(&sqrt_eg2E);
-
-    clearGrad();
-  }
-
-  void clearGrad() {
-    static hash_set<int>::iterator it;
-
-    for (it = _indexers.begin(); it != _indexers.end(); ++it) {
-      int index = *it;
-      _gradE[index] = 0.0;
+    inline void setEmbFineTune(bool bFineTune) {
+        _bFineTune = bFineTune;
     }
 
-    _indexers.clear();
-
-  }
-
-  void updateSparseWeight(int wordId) {
-    if(!_bFineTune) return;
-    if (_last_update[wordId] < _max_update) {
-      int times = _max_update - _last_update[wordId];
-      _E[wordId] = _E[wordId] * F<nl_exp>(times * F<nl_log>(_ftE[wordId]));
-      _last_update[wordId] = _max_update;
+    inline void release() {
+        FreeSpace(&_E);
+        FreeSpace(&_gradE);
+        FreeSpace(&_eg2E);
+        FreeSpace(&_ftE);
+        _indexers.clear();
     }
 
-  }
+    virtual ~LookupTable() {
+        // TODO Auto-generated destructor stub
+    }
+
+    inline dtype squarenormAll() {
+        dtype result = 0;
+        static hash_set<int>::iterator it;
+        for (int idx = 0; idx < _nDim; idx++) {
+            for (it = _indexers.begin(); it != _indexers.end(); ++it) {
+                result += _gradE[*it][idx] * _gradE[*it][idx];
+            }
+        }
+
+
+        return result;
+    }
+
+    inline void scaleGrad(dtype scale) {
+        static hash_set<int>::iterator it;
+        for (int idx = 0; idx < _nDim; idx++) {
+            for (it = _indexers.begin(); it != _indexers.end(); ++it) {
+                _gradE[*it][idx] = _gradE[*it][idx] * scale;
+            }
+        }
+
+    }
+
+    inline bool bEmbFineTune()
+    {
+        return _bFineTune;
+    }
+
+public:
+    void GetEmb(int id, Tensor<xpu, 2, dtype> y) {
+        updateSparseWeight(id);
+        assert(y.size(0) == 1);
+        y = 0.0;
+        y[0] += _E[id];
+    }
+
+    // loss is stopped at this layer, since the input is one-hold alike
+    void EmbLoss(int id, Tensor<xpu, 2, dtype> ly) {
+        if(!_bFineTune) return;
+        //_gradE
+        assert(ly.size(0) == 1);
+        _gradE[id] += ly[0];
+        _indexers.insert(id);
+
+    }
+
+
+    void randomprint(int num) {
+        static int _nVSize, _nDim;
+        _nVSize = _E.size(0);
+        _nDim = _E.size(1);
+        int count = 0;
+        while (count < num) {
+            int idx = rand() % _nVSize;
+            int idy = rand() % _nDim;
+
+            std::cout << "_E[" << idx << "," << idy << "]=" << _E[idx][idy] << " ";
+
+            count++;
+        }
+
+        std::cout << std::endl;
+    }
+
+    void updateAdaGrad(dtype regularizationWeight, dtype adaAlpha, dtype adaEps) {
+
+        if(!_bFineTune) return;
+        static hash_set<int>::iterator it;
+        _max_update++;
+
+        Tensor<xpu, 1, dtype> sqrt_eg2E = NewTensor<xpu>(Shape1(_E.size(1)), d_zero);
+
+        for (it = _indexers.begin(); it != _indexers.end(); ++it) {
+            int index = *it;
+            _eg2E[index] = _eg2E[index] + _gradE[index] * _gradE[index];
+            sqrt_eg2E = F<nl_sqrt>(_eg2E[index] + adaEps);
+            _E[index] = (_E[index] * sqrt_eg2E - _gradE[index] * adaAlpha) / (adaAlpha * regularizationWeight + sqrt_eg2E);
+            _ftE[index] = sqrt_eg2E / (adaAlpha * regularizationWeight + sqrt_eg2E);
+        }
+
+        FreeSpace(&sqrt_eg2E);
+
+        clearGrad();
+    }
+
+    void clearGrad() {
+        static hash_set<int>::iterator it;
+
+        for (it = _indexers.begin(); it != _indexers.end(); ++it) {
+            int index = *it;
+            _gradE[index] = 0.0;
+        }
+
+        _indexers.clear();
+
+    }
+
+    void updateSparseWeight(int wordId) {
+        if(!_bFineTune) return;
+        if (_last_update[wordId] < _max_update) {
+            int times = _max_update - _last_update[wordId];
+            _E[wordId] = _E[wordId] * F<nl_exp>(times * F<nl_log>(_ftE[wordId]));
+            _last_update[wordId] = _max_update;
+        }
+
+    }
 };
 
 #endif /* SRC_LookupTable_H_ */

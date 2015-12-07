@@ -25,169 +25,169 @@ class SparseUniLayer1O {
 
 public:
 
-  hash_set<int> _indexers;
+    hash_set<int> _indexers;
 
-  Tensor<xpu, 1, dtype> _W;
+    Tensor<xpu, 1, dtype> _W;
 
-  Tensor<xpu, 1, dtype> _gradW;
+    Tensor<xpu, 1, dtype> _gradW;
 
-  Tensor<xpu, 1, dtype> _eg2W;
+    Tensor<xpu, 1, dtype> _eg2W;
 
-  Tensor<xpu, 1, dtype> _ftW;
+    Tensor<xpu, 1, dtype> _ftW;
 
 
-  int _max_update;
-  NRVec<int> _last_update;
+    int _max_update;
+    NRVec<int> _last_update;
 
 
 public:
 
-  SparseUniLayer1O() {
-    _indexers.clear();
-  }
+    SparseUniLayer1O() {
+        _indexers.clear();
+    }
 
-  inline void initial(int nISize, int seed = 0) {
-    dtype bound = sqrt(6.0 / (nISize + 1));
-    //dtype bound = 0.01;
+    inline void initial(int nISize, int seed = 0) {
+        dtype bound = sqrt(6.0 / (nISize + 1));
+        //dtype bound = 0.01;
 
-    _W = NewTensor<xpu>(Shape1(nISize), d_zero);
-    _gradW = NewTensor<xpu>(Shape1(nISize), d_zero);
-    _eg2W = NewTensor<xpu>(Shape1(nISize), d_zero);
-    _ftW = NewTensor<xpu>(Shape1(nISize), d_one);
-
-
-    random(_W, -1.0 * bound, 1.0 * bound, seed);
-
-    _max_update = 0;
-    _last_update.resize(nISize);
-    _last_update = 0;
-  }
-
-  inline void initial(Tensor<xpu, 1, dtype> W) {
-    static int nOSize, nISize;
-    nISize = W.size(0);
-
-    _W = NewTensor<xpu>(Shape1(nISize), d_zero);
-    _gradW = NewTensor<xpu>(Shape1(nISize), d_zero);
-    _eg2W = NewTensor<xpu>(Shape1(nISize), d_zero);
-    _ftW = NewTensor<xpu>(Shape1(nISize), d_one);
-    Copy(_W, W);
+        _W = NewTensor<xpu>(Shape1(nISize), d_zero);
+        _gradW = NewTensor<xpu>(Shape1(nISize), d_zero);
+        _eg2W = NewTensor<xpu>(Shape1(nISize), d_zero);
+        _ftW = NewTensor<xpu>(Shape1(nISize), d_one);
 
 
-    _max_update = 0;
-    _last_update.resize(nISize);
-    _last_update = 0;
-  }
+        random(_W, -1.0 * bound, 1.0 * bound, seed);
 
-  inline void release() {
-    FreeSpace(&_W);
-    FreeSpace(&_gradW);
-    FreeSpace(&_eg2W);
-    FreeSpace(&_ftW);
-    _indexers.clear();
-  }
+        _max_update = 0;
+        _last_update.resize(nISize);
+        _last_update = 0;
+    }
 
-  virtual ~SparseUniLayer1O() {
-    // TODO Auto-generated destructor stub
-  }
+    inline void initial(Tensor<xpu, 1, dtype> W) {
+        static int nOSize, nISize;
+        nISize = W.size(0);
 
-  inline dtype squarenormAll() {
-    dtype result = squarenorm(_gradW);
+        _W = NewTensor<xpu>(Shape1(nISize), d_zero);
+        _gradW = NewTensor<xpu>(Shape1(nISize), d_zero);
+        _eg2W = NewTensor<xpu>(Shape1(nISize), d_zero);
+        _ftW = NewTensor<xpu>(Shape1(nISize), d_one);
+        Copy(_W, W);
 
-    return result;
-  }
 
-  inline void scaleGrad(dtype scale) {
-    _gradW = _gradW * scale;
-  }
+        _max_update = 0;
+        _last_update.resize(nISize);
+        _last_update = 0;
+    }
+
+    inline void release() {
+        FreeSpace(&_W);
+        FreeSpace(&_gradW);
+        FreeSpace(&_eg2W);
+        FreeSpace(&_ftW);
+        _indexers.clear();
+    }
+
+    virtual ~SparseUniLayer1O() {
+        // TODO Auto-generated destructor stub
+    }
+
+    inline dtype squarenormAll() {
+        dtype result = squarenorm(_gradW);
+
+        return result;
+    }
+
+    inline void scaleGrad(dtype scale) {
+        _gradW = _gradW * scale;
+    }
 
 public:
-  void ComputeForwardScore(const std::vector<int>& x, dtype& y) {
-    static long long featNum, featId;
-    featNum = x.size();
-    y = 0.0;
-    for (int idx = 0; idx < featNum; idx++) {
-      featId = x[idx];
-      if(featId >= _W.size(0))continue;
-      updateSparseWeight(featId);
-      y += _W[featId];
+    void ComputeForwardScore(const std::vector<int>& x, dtype& y) {
+        static long long featNum, featId;
+        featNum = x.size();
+        y = 0.0;
+        for (int idx = 0; idx < featNum; idx++) {
+            featId = x[idx];
+            if(featId >= _W.size(0))continue;
+            updateSparseWeight(featId);
+            y += _W[featId];
+        }
+
     }
 
-  }
-
-  // loss is stopped at this layer, since the input is one-hold alike
-  void ComputeBackwardLoss(const std::vector<int>& x, dtype ly) {
-    //_gradW
-    static long long featNum, featId;
-    featNum = x.size();
-    for (int idx = 0; idx < featNum; idx++) {
-      featId = x[idx];
-      if(featId >= _W.size(0))continue;
-      _indexers.insert(featId);
-      _gradW[featId] += ly;
-    }
-  }
-
-
-  void randomprint(int num) {
-    static int nISize;
-    nISize = _W.size(0);
-
-    int count = 0;
-    while (count < num) {
-      int idx = rand() % nISize;
-      std::cout << "_W[" << idx  << "]=" << _W[idx] << " ";
-      count++;
-    }
-
-    std::cout << std::endl;
-  }
-
-  void updateAdaGrad(dtype regularizationWeight, dtype adaAlpha, dtype adaEps) {
-    static int startPos;
-
-    static hash_set<int>::iterator it;
-
-    _max_update++;
-
-    dtype sqrt_eg2W = d_zero;
-
-
-    for (it = _indexers.begin(); it != _indexers.end(); ++it) {
-      int index = *it;
-      _eg2W[index] = _eg2W[index] + _gradW[index] * _gradW[index];
-      sqrt_eg2W = sqrt(_eg2W[index] + adaEps);
-      _W[index] = (_W[index] * sqrt_eg2W - _gradW[index] * adaAlpha) / (adaAlpha * regularizationWeight + sqrt_eg2W);
-      _ftW[index] = sqrt_eg2W / (adaAlpha * regularizationWeight + sqrt_eg2W);
+    // loss is stopped at this layer, since the input is one-hold alike
+    void ComputeBackwardLoss(const std::vector<int>& x, dtype ly) {
+        //_gradW
+        static long long featNum, featId;
+        featNum = x.size();
+        for (int idx = 0; idx < featNum; idx++) {
+            featId = x[idx];
+            if(featId >= _W.size(0))continue;
+            _indexers.insert(featId);
+            _gradW[featId] += ly;
+        }
     }
 
 
-    //for (it = _indexers.begin(); it != _indexers.end(); ++it) {
-    //  int index = *it;
-    //  _W[index] = _W[index] - _gradW[index];
-    //}
+    void randomprint(int num) {
+        static int nISize;
+        nISize = _W.size(0);
 
-    clearGrad();
-  }
+        int count = 0;
+        while (count < num) {
+            int idx = rand() % nISize;
+            std::cout << "_W[" << idx  << "]=" << _W[idx] << " ";
+            count++;
+        }
 
-  void clearGrad() {
-    static hash_set<int>::iterator it;
-    for (it = _indexers.begin(); it != _indexers.end(); ++it) {
-      int index = *it;
-      _gradW[index] = 0.0;
+        std::cout << std::endl;
     }
-    _indexers.clear();
 
-  }
+    void updateAdaGrad(dtype regularizationWeight, dtype adaAlpha, dtype adaEps) {
+        static int startPos;
 
-  void updateSparseWeight(long long featId) {
+        static hash_set<int>::iterator it;
 
-    if (_last_update[featId] < _max_update) {
-      int times = _max_update - _last_update[featId];
-      _W[featId] = _W[featId] * exp(times * log(_ftW[featId]));
-      _last_update[featId] = _max_update;
+        _max_update++;
+
+        dtype sqrt_eg2W = d_zero;
+
+
+        for (it = _indexers.begin(); it != _indexers.end(); ++it) {
+            int index = *it;
+            _eg2W[index] = _eg2W[index] + _gradW[index] * _gradW[index];
+            sqrt_eg2W = sqrt(_eg2W[index] + adaEps);
+            _W[index] = (_W[index] * sqrt_eg2W - _gradW[index] * adaAlpha) / (adaAlpha * regularizationWeight + sqrt_eg2W);
+            _ftW[index] = sqrt_eg2W / (adaAlpha * regularizationWeight + sqrt_eg2W);
+        }
+
+
+        //for (it = _indexers.begin(); it != _indexers.end(); ++it) {
+        //  int index = *it;
+        //  _W[index] = _W[index] - _gradW[index];
+        //}
+
+        clearGrad();
     }
-  }
+
+    void clearGrad() {
+        static hash_set<int>::iterator it;
+        for (it = _indexers.begin(); it != _indexers.end(); ++it) {
+            int index = *it;
+            _gradW[index] = 0.0;
+        }
+        _indexers.clear();
+
+    }
+
+    void updateSparseWeight(long long featId) {
+
+        if (_last_update[featId] < _max_update) {
+            int times = _max_update - _last_update[featId];
+            _W[featId] = _W[featId] * exp(times * log(_ftW[featId]));
+            _last_update[featId] = _max_update;
+        }
+    }
 };
 
 

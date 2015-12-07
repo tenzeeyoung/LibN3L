@@ -15,17 +15,17 @@ using namespace mshadow::expr;
 using namespace mshadow::utils;
 
 template<typename xpu, int N>
-class ParameterBase{
+class ParameterBase {
 public:
     Tensor<xpu, N, dtype> weight; // value for the parameter
     Tensor<xpu, N, dtype> grad; // gradients for the parameter
     Tensor<xpu, N, dtype> egrad; // sum gradients for the adagrad
 
-    ParameterBase(){}
+    ParameterBase() {}
 
     inline void random(dtype bound, int seed)
     {
-        random(weight, -1.0*bound, 1.0*bound, seed);    
+        random(weight, -1.0*bound, 1.0*bound, seed);
     }
     void release()
     {
@@ -80,7 +80,7 @@ template<typename xpu>
 class Parameter<xpu, 1>: public ParameterBase<xpu, 1>
 {
 public:
-    Parameter(){}
+    Parameter() {}
     explicit Parameter(int nOSize)
     {
         this->weight = NewTensor<xpu>(Shape2(1, nOSize), d_zero); //must add this pointer here
@@ -96,9 +96,9 @@ public:
 };
 
 template<typename xpu>
-class Parameter<xpu,2>:public ParameterBase<xpu, 2>{
+class Parameter<xpu,2>:public ParameterBase<xpu, 2> {
 public:
-    Parameter(){}
+    Parameter() {}
     explicit Parameter(int nOSize, int nISize)
     {
         this->weight = NewTensor<xpu>(Shape2(nOSize, nISize), d_zero);
